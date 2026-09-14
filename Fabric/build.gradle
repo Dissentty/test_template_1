@@ -1,0 +1,53 @@
+plugins {
+    id 'net.fabricmc.fabric-loom'
+    id 'java-library'
+    id 'idea'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(java_version as int)
+    withSourcesJar()
+}
+
+loom {
+    splitEnvironmentSourceSets()
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+            sourceSet sourceSets.client
+        }
+    }
+    runs {
+        client {
+            client()
+            name = 'Fabric Client'
+            runDir 'run/client'
+        }
+        server {
+            server()
+            name = 'Fabric Server'
+            runDir 'run/server'
+        }
+    }
+}
+
+apply from: rootProject.file('gradle/loader-sources.gradle')
+
+// Loom knows main/client. Add the dedicated-server-only source set to the dev mod too.
+loom.mods.named(mod_id) {
+    sourceSet sourceSets.server
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
+    compileOnly "org.spongepowered:mixin:${mixin_compile_version}"
+}
+
+base {
+    archivesName = "${mod_id}-fabric-${minecraft_version}"
+}
+
+tasks.named('remapJar').configure {
+    dependsOn tasks.named('serverClasses')
+}

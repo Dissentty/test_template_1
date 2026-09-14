@@ -1,0 +1,20 @@
+plugins {
+    id 'net.neoforged.moddev'
+}
+
+apply from: rootProject.file('gradle/common-module.gradle')
+
+neoForge {
+    // Common is compiled against vanilla/NeoForm only; it does not depend on NeoForge APIs.
+    neoFormVersion = minecraft_version
+}
+
+dependencies {
+    compileOnly "org.spongepowered:mixin:${mixin_compile_version}"
+}
+
+tasks.named('jar').configure {
+    archiveClassifier = 'common-dev'
+    from(sourceSets.client.output)
+    from(sourceSets.server.output)
+}

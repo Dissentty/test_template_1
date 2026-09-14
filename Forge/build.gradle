@@ -1,0 +1,71 @@
+plugins {
+    id 'java-library'
+    id 'idea'
+    id 'net.minecraftforge.gradle' version '[7.0.17,8)'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(java_version as int)
+    withSourcesJar()
+}
+
+// ForgeGradle run configs reference these before loader-sources.gradle adds paths.
+sourceSets {
+    client
+    server
+}
+
+minecraft {
+    mappings channel: 'official', version: minecraft_version
+
+    runs {
+        configureEach {
+            workingDir.convention layout.projectDirectory.dir('run')
+            systemProperty 'eventbus.api.strictRuntimeChecks', 'true'
+            systemProperty 'forge.logging.console.level', 'debug'
+        }
+        register('client') {
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                    source sourceSets.client
+                }
+            }
+        }
+        register('server') {
+            args '--nogui'
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                    source sourceSets.server
+                }
+            }
+        }
+    }
+}
+
+repositories {
+    minecraft.mavenizer(it)
+    maven fg.forgeMaven
+    maven fg.minecraftLibsMaven
+    mavenCentral()
+    maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
+}
+
+apply from: rootProject.file('gradle/loader-sources.gradle')
+
+dependencies {
+    implementation minecraft.dependency("net.minecraftforge:forge:${minecraft_version}-${forge_version}")
+    annotationProcessor "net.minecraftforge:eventbus-validator:${forge_eventbus_validator_version}"
+    compileOnly "org.spongepowered:mixin:${mixin_compile_version}"
+}
+
+base {
+    archivesName = "${mod_id}-forge-${minecraft_version}"
+}
+
+tasks.named('jar', Jar).configure {
+    manifest {
+        attributes('MixinConfigs': "${mod_id}.mixins.json")
+    }
+}

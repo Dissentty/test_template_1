@@ -1,0 +1,166 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+apply plugin: 'com.gradleup.shadow'
+
+def unpackTask = { TaskProvider provider ->
+    provider.map { zipTree(it.archiveFile.get().asFile) }
+}
+
+def textExtensions = ['json', 'toml', 'mcmeta', 'mf', 'cfg', 'properties', 'txt', 'accesswidener'] as Set
+
+def configureRelocation = { ShadowJar task, String loader, Project loaderProject, String jarTaskName ->
+    def loaderJar = loaderProject.tasks.named(jarTaskName)
+    task.dependsOn(loaderJar)
+    task.group = 'universal build'
+    task.archiveClassifier.set("${loader}-relocated")
+    task.destinationDirectory.set(layout.buildDirectory.dir('relocated'))
+    task.from { unpackTask(loaderJar) }
+
+    // Every loader gets its own relocated copy of Common. Loader adapter packages are
+    // restored to stable names in universalJar below.
+    def originalPackage = base_package
+    def relocatedPackage = "${base_package}_common_${loader}"
+    task.relocate(originalPackage, relocatedPackage)
+
+    def originalMixin = "${mod_id}.mixins.json"
+    def relocatedMixin = "${mod_id}_${loader}.mixins.json"
+    task.rename("^${java.util.regex.Pattern.quote(originalMixin)}$", relocatedMixin)
+
+    task.eachFile { FileCopyDetails details ->
+        def ext = details.name.contains('.') ? details.name.substring(details.name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT) : ''
+        if (textExtensions.contains(ext)) {
+            details.filter { String line ->
+                line
+                    .replace(originalPackage, relocatedPackage)
+                    .replace(originalMixin, relocatedMixin)
+            }
+        }
+    }
+
+    // Preserve and rewrite the loader's own manifest.
+    task.manifest {
+        from {
+            unpackTask(loaderJar).get().matching { include 'META-INF/MANIFEST.MF' }.files.find { true }
+        }
+        eachEntry { details ->
+            if (details.value instanceof String) {
+                details.value = details.value
+                    .replace(originalPackage, relocatedPackage)
+                    .replace(originalMixin, relocatedMixin)
+            }
+        }
+    }
+
+    task.exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+}
+
+def fabricProject = project(':Fabric')
+def forgeProject = project(':Forge')
+def neoForgeProject = project(':NeoForge')
+
+tasks.register('relocateFabric', ShadowJar) {
+    configureRelocation(delegate, 'fabric', fabricProject, 'remapJar')
+}
+
+tasks.register('relocateForge', ShadowJar) {
+    configureRelocation(delegate, 'forge', forgeProject, 'jar')
+}
+
+tasks.register('relocateNeoForge', ShadowJar) {
+    configureRelocation(delegate, 'neoforge', neoForgeProject, 'jar')
+}
+
+tasks.register('universalJar', ShadowJar) {
+    group = 'universal build'
+    description = 'Builds one JAR loadable by Fabric, Quilt, Forge and NeoForge.'
+    archiveFileName = "${mod_id}-${mod_version}+${minecraft_version}.jar"
+    destinationDirectory = layout.buildDirectory.dir('libs')
+    includeEmptyDirs = false
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    def fabric = tasks.named('relocateFabric', ShadowJar)
+    def forge = tasks.named('relocateForge', ShadowJar)
+    def neo = tasks.named('relocateNeoForge', ShadowJar)
+    dependsOn fabric, forge, neo, 'checkTemplateIdentity', 'checkCommonSides'
+
+    from { unpackTask(fabric) }
+    from { unpackTask(forge) }
+    from { unpackTask(neo) }
+
+    // Restore only the loader adapter packages. Common remains isolated per loader.
+    def packagePairs = [
+        ["${base_package}_common_fabric.fabric", "${base_package}.fabric"],
+        ["${base_package}_common_forge.forge", "${base_package}.forge"],
+        ["${base_package}_common_neoforge.neoforge", "${base_package}.neoforge"]
+    ]
+    packagePairs.each { pair -> relocate(pair[0], pair[1]) }
+
+    eachFile { FileCopyDetails details ->
+        def ext = details.name.contains('.') ? details.name.substring(details.name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT) : ''
+        if (textExtensions.contains(ext)) {
+            details.filter { String line ->
+                def out = line
+                packagePairs.each { pair -> out = out.replace(pair[0], pair[1]) }
+                out
+            }
+        }
+    }
+
+    // Keep Forge's manifest because it carries MixinConfigs. Loader metadata for all
+    // platforms remains as normal files inside the universal archive.
+    manifest {
+        from {
+            unpackTask(forge).get().matching { include 'META-INF/MANIFEST.MF' }.files.find { true }
+        }
+        eachEntry { details ->
+            if (details.value instanceof String) {
+                def out = details.value
+                packagePairs.each { pair -> out = out.replace(pair[0], pair[1]) }
+                details.value = out
+            }
+        }
+        attributes(
+            'Implementation-Title': mod_name,
+            'Implementation-Version': mod_version,
+            'Built-On-Minecraft': minecraft_version,
+            'Universal-Loaders': 'Fabric, Quilt, Forge, NeoForge'
+        )
+    }
+
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+}
+
+tasks.register('inspectUniversalJar') {
+    group = 'verification'
+    dependsOn 'universalJar'
+    doLast {
+        def jarFile = tasks.named('universalJar', ShadowJar).get().archiveFile.get().asFile
+        def tree = zipTree(jarFile)
+        def required = [
+            'fabric.mod.json',
+            'META-INF/mods.toml',
+            'META-INF/neoforge.mods.toml',
+            "${mod_id}_fabric.mixins.json",
+            "${mod_id}_forge.mixins.json",
+            "${mod_id}_neoforge.mixins.json"
+        ]
+        def paths = tree.files.collect { it.path.replace('\\', '/') }
+        required.each { requiredPath ->
+            if (!paths.any { it.endsWith('/' + requiredPath) || it == requiredPath }) {
+                throw new GradleException("Universal JAR is missing ${requiredPath}")
+            }
+        }
+
+        ['fabric', 'forge', 'neoforge'].each { loader ->
+            def relocatedPath = base_package.replace('.', '/') + "_common_${loader}/"
+            if (!paths.any { it.contains(relocatedPath) }) {
+                throw new GradleException("No relocated common classes found for ${loader}: expected ${relocatedPath}")
+            }
+        }
+        println "Verified universal JAR: ${jarFile}"
+    }
+}
+
+tasks.named('build') {
+    dependsOn 'inspectUniversalJar'
+}

@@ -1,0 +1,50 @@
+plugins {
+    id 'java-library'
+    id 'idea'
+    id 'net.neoforged.moddev'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(java_version as int)
+    withSourcesJar()
+}
+
+sourceSets {
+    // loader-sources.gradle adds actual paths after this block.
+    client
+    server
+}
+
+apply from: rootProject.file('gradle/loader-sources.gradle')
+
+neoForge {
+    version = neoforge_version
+
+    runs {
+        client {
+            client()
+            gameDirectory = file('run/client')
+        }
+        server {
+            server()
+            gameDirectory = file('run/server')
+            programArgument '--nogui'
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+            sourceSet(sourceSets.client)
+            sourceSet(sourceSets.server)
+        }
+    }
+}
+
+dependencies {
+    compileOnly "org.spongepowered:mixin:${mixin_compile_version}"
+}
+
+base {
+    archivesName = "${mod_id}-neoforge-${minecraft_version}"
+}

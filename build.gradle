@@ -1,0 +1,50 @@
+plugins {
+    id 'base'
+    id 'net.fabricmc.fabric-loom' version "${loom_version}" apply false
+    id 'net.neoforged.moddev' version "${moddevgradle_version}" apply false
+    id 'com.gradleup.shadow' version "${shadow_version}" apply false
+}
+
+allprojects {
+    group = maven_group
+    version = mod_version
+}
+
+tasks.register('checkTemplateIdentity') {
+    group = 'verification'
+    description = 'Checks that the example Java package still matches base_package.'
+    doLast {
+        def expectedPath = base_package.replace('.', '/')
+        def commonRoot = file("Common/src/main/java/${expectedPath}")
+        if (!commonRoot.exists()) {
+            throw new GradleException("base_package=${base_package} but ${commonRoot} does not exist. Rename the Java package or restore base_package.")
+        }
+    }
+}
+
+tasks.register('checkCommonSides') {
+    group = 'verification'
+    description = 'Rejects direct net.minecraft.client references from common and server-only Java sources.'
+    doLast {
+        def roots = [
+            file('Common/src/main/java'),
+            file('Common/src/server/java')
+        ]
+        def bad = []
+        roots.findAll { it.exists() }.each { root ->
+            fileTree(root).matching { include '**/*.java' }.files.each { f ->
+                def text = f.getText('UTF-8')
+                if (text =~ /\bnet\.minecraft\.client\b/) bad << f
+            }
+        }
+        if (!bad.isEmpty()) {
+            throw new GradleException('Client-only Minecraft references found outside Common/src/client/java:\n' + bad.collect { " - ${it}" }.join('\n'))
+        }
+    }
+}
+
+apply from: 'gradle/universal.gradle'
+
+tasks.named('check') {
+    dependsOn 'checkTemplateIdentity', 'checkCommonSides'
+}

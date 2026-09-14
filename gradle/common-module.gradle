@@ -1,0 +1,71 @@
+plugins.apply('java-library')
+plugins.apply('idea')
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(java_version as int)
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = java_version as int
+}
+
+sourceSets {
+    client {
+        java.srcDir 'src/client/java'
+        resources.srcDir 'src/client/resources'
+        compileClasspath += sourceSets.main.output + configurations.mainCompileClasspath
+        runtimeClasspath += output + compileClasspath
+    }
+    server {
+        java.srcDir 'src/server/java'
+        resources.srcDir 'src/server/resources'
+        compileClasspath += sourceSets.main.output + configurations.mainCompileClasspath
+        runtimeClasspath += output + compileClasspath
+    }
+}
+
+configurations {
+    clientImplementation.extendsFrom implementation
+    clientCompileOnly.extendsFrom compileOnly
+    clientAnnotationProcessor.extendsFrom annotationProcessor
+    serverImplementation.extendsFrom implementation
+    serverCompileOnly.extendsFrom compileOnly
+    serverAnnotationProcessor.extendsFrom annotationProcessor
+}
+
+def generatedConstantsDir = layout.buildDirectory.dir('generated/sources/modConstants')
+
+tasks.register('generateModConstants') {
+    outputs.dir(generatedConstantsDir)
+    inputs.properties([
+        base_package: base_package,
+        mod_id: mod_id,
+        mod_name: mod_name,
+        mod_version: mod_version,
+        minecraft_version: minecraft_version
+    ])
+    doLast {
+        def packagePath = base_package.replace('.', '/')
+        def out = generatedConstantsDir.get().file("${packagePath}/generated/ModConstants.java").asFile
+        out.parentFile.mkdirs()
+        out.text = """package ${base_package}.generated;
+
+/** Generated from gradle.properties. Do not edit by hand. */
+public final class ModConstants {
+    public static final String MOD_ID = \"${mod_id}\";
+    public static final String MOD_NAME = \"${mod_name.replace('\\', '\\\\').replace('"', '\\"')}\";
+    public static final String VERSION = \"${mod_version}\";
+    public static final String MINECRAFT_VERSION = \"${minecraft_version}\";
+
+    private ModConstants() {}
+}
+"""
+    }
+}
+
+sourceSets.main.java.srcDir(generatedConstantsDir)
+tasks.named('compileJava').configure { dependsOn 'generateModConstants' }
+tasks.named('compileClientJava').configure { dependsOn 'generateModConstants' }
+tasks.named('compileServerJava').configure { dependsOn 'generateModConstants' }

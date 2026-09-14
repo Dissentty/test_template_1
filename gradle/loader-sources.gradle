@@ -1,0 +1,114 @@
+// Recompile Common sources in every loader project. This is intentional: each loader
+// receives its own copy, which is relocated before the final universal JAR is assembled.
+
+def commonProject = project(':Common')
+
+sourceSets.main.java.srcDir commonProject.file('src/main/java')
+sourceSets.main.resources.srcDir commonProject.file('src/main/resources')
+
+if (sourceSets.findByName('client') == null) {
+    sourceSets.create('client')
+}
+sourceSets.client.java.srcDir commonProject.file('src/client/java')
+sourceSets.client.resources.srcDir commonProject.file('src/client/resources')
+
+if (sourceSets.findByName('server') == null) {
+    sourceSets.create('server')
+}
+sourceSets.server.java.srcDir commonProject.file('src/server/java')
+sourceSets.server.resources.srcDir commonProject.file('src/server/resources')
+
+sourceSets.client.compileClasspath += sourceSets.main.output + configurations.mainCompileClasspath
+sourceSets.client.runtimeClasspath += sourceSets.client.output + sourceSets.client.compileClasspath
+sourceSets.server.compileClasspath += sourceSets.main.output + configurations.mainCompileClasspath
+sourceSets.server.runtimeClasspath += sourceSets.server.output + sourceSets.server.compileClasspath
+
+configurations {
+    clientImplementation.extendsFrom implementation
+    clientCompileOnly.extendsFrom compileOnly
+    clientAnnotationProcessor.extendsFrom annotationProcessor
+    serverImplementation.extendsFrom implementation
+    serverCompileOnly.extendsFrom compileOnly
+    serverAnnotationProcessor.extendsFrom annotationProcessor
+}
+
+def generatedConstantsDir = layout.buildDirectory.dir('generated/sources/modConstants')
+
+tasks.register('generateModConstants') {
+    outputs.dir(generatedConstantsDir)
+    inputs.properties([
+        base_package: base_package,
+        mod_id: mod_id,
+        mod_name: mod_name,
+        mod_version: mod_version,
+        minecraft_version: minecraft_version
+    ])
+    doLast {
+        def packagePath = base_package.replace('.', '/')
+        def out = generatedConstantsDir.get().file("${packagePath}/generated/ModConstants.java").asFile
+        out.parentFile.mkdirs()
+        out.text = """package ${base_package}.generated;
+
+/** Generated from gradle.properties. Do not edit by hand. */
+public final class ModConstants {
+    public static final String MOD_ID = \"${mod_id}\";
+    public static final String MOD_NAME = \"${mod_name.replace('\\', '\\\\').replace('"', '\\"')}\";
+    public static final String VERSION = \"${mod_version}\";
+    public static final String MINECRAFT_VERSION = \"${minecraft_version}\";
+
+    private ModConstants() {}
+}
+"""
+    }
+}
+sourceSets.main.java.srcDir(generatedConstantsDir)
+
+tasks.withType(JavaCompile).configureEach {
+    dependsOn 'generateModConstants'
+    options.encoding = 'UTF-8'
+    options.release = java_version as int
+}
+
+// Include all three conceptual sides in the loader's development artifact.
+tasks.named('jar', Jar).configure {
+    dependsOn tasks.named('clientClasses'), tasks.named('serverClasses')
+    from(sourceSets.client.output)
+    from(sourceSets.server.output)
+}
+
+// All loader metadata values come from gradle.properties.
+def metadataProps = [
+    mod_id: mod_id,
+    mod_name: mod_name,
+    mod_version: mod_version,
+    mod_description: mod_description,
+    mod_authors: mod_authors,
+    mod_license: mod_license,
+    base_package: base_package,
+    minecraft_version: minecraft_version,
+    minecraft_version_range: minecraft_version_range,
+    fabric_loader_version: fabric_loader_version,
+    forge_version: forge_version,
+    forge_loader_version_range: forge_loader_version_range,
+    neoforge_version: neoforge_version,
+    java_version: java_version
+]
+
+def jsonProps = metadataProps.collectEntries { key, value ->
+    def escaped = value instanceof String
+        ? value.replace('\\', '\\\\').replace('\n', '\\n').replace('\"', '\\\"')
+        : value
+    [(key): escaped]
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    inputs.properties(metadataProps)
+
+    filesMatching(['META-INF/mods.toml', 'META-INF/neoforge.mods.toml']) {
+        expand(metadataProps)
+    }
+
+    filesMatching(['fabric.mod.json', '*.mixins.json']) {
+        expand(jsonProps)
+    }
+}
